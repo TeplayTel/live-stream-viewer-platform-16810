@@ -23,43 +23,55 @@ const BrandLogo = () => (
 function MainApp() {
   // YouTube live stream ID (replace with real ID or source from config/api)
   const YOUTUBE_LIVE_VIDEO_ID = "5qap5aO4i9A"; // Example: LoFi Girl (always live)
+  const STREAM_ID = YOUTUBE_LIVE_VIDEO_ID; // Could be further generalized
 
   const [theme, setTheme] = useState("dark");
   const [player, setPlayer] = useState(null);
   const [isPlaying, setIsPlaying] = useState(true);
   const [volume, setVolume] = useState(80);
 
-  // Placeholder for live status & view count (should poll backend/metrics for real views)
-  const [liveStatus] = useState("LIVE");
+  // Live status comes from server metrics (could fetch actual live stream status in future)
+  const [liveStatus, setLiveStatus] = useState("LIVE");
   const [activeViewers, setActiveViewers] = useState("--");
+
+  // For tracking user's watch session
+  const [watchSessionId, setWatchSessionId] = useState(null);
+  const [sessionStartTime, setSessionStartTime] = useState(null);
 
   // Auth Modal UI state
   const [showAuth, setShowAuth] = useState(false);
   const [authMode, setAuthMode] = useState("login"); // or 'signup'
 
   // Auth context
-  const { isAuthenticated, user, logout, loading } = useContext(AuthContext);
+  const { isAuthenticated, user, logout, loading, token } = useContext(AuthContext);
 
+  // Update theme
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
   }, [theme]);
 
-  // Fetch viewer statistics
+  // Fetch viewer statistics & live status
   useEffect(() => {
+    // Can be refetched more frequently after "watch_start"/"watch_stop" for more immediate feedback
     async function fetchMetrics() {
       try {
         const resp = await fetch("/api/metrics");
         if (resp.ok) {
           const data = await resp.json();
-          if (
-            typeof data?.total_active_viewers === "number" ||
-            typeof data?.total_active_viewers === "string"
-          ) {
+          if (typeof data?.total_active_viewers === "number" || typeof data?.total_active_viewers === "string") {
             setActiveViewers(data.total_active_viewers);
+            setLiveStatus("LIVE"); // Always live for demo; can map to backend "health" if needed
+          } else {
+            setActiveViewers("--");
+            setLiveStatus("OFFLINE");
           }
+        } else {
+          setActiveViewers("--");
+          setLiveStatus("OFFLINE");
         }
       } catch (e) {
-        // Leave fallback
+        setActiveViewers("--");
+        setLiveStatus("OFFLINE");
       }
     }
     fetchMetrics();
@@ -72,26 +84,114 @@ function MainApp() {
     setTheme((t) => (t === "light" ? "dark" : "light"));
   };
 
-  // Player controls
+  // --- Player controls and viewer event tracking ---
+
+  // Helper: POST with JWT to backend
+  async function postWithJwt(url, body) {
+    return fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(body),
+    });
+  }
+
+  // Start watching event (notify backend & store session_id)
+  async function startWatching() {
+    if (!(isAuthenticated && user && token && !watchSessionId)) return;
+    try {
+      const resp = await postWithJwt(
+        `/api/stats/watch_start?user_id=${user.id}`,
+        { stream_id: STREAM_ID }
+      );
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data.id != null && data.started_at) {
+          setWatchSessionId(data.id);
+          setSessionStartTime(Date.now());
+        }
+      }
+    } catch (e) {
+      // Optionally, show error to user
+    }
+  }
+
+  // Stop watching event (notify backend using session_id)
+  async function stopWatching() {
+    if (!(isAuthenticated && user && token && watchSessionId)) return;
+    try {
+      await postWithJwt(
+        `/api/stats/watch_stop?session_id=${watchSessionId}&user_id=${user.id}`,
+        {}
+      );
+      setWatchSessionId(null);
+      setSessionStartTime(null);
+    } catch (e) {
+      // Optionally, show error to user
+    }
+  }
+
+  // Track YouTube player ready/playing/pausing to fire backend events
   const onPlayerReady = (event) => {
     setPlayer(event.target);
     event.target.setVolume(volume);
-    if (isPlaying) event.target.playVideo();
-    else event.target.pauseVideo();
+    if (isPlaying) {
+      event.target.playVideo();
+    } else {
+      event.target.pauseVideo();
+    }
+    // Automatically start watching if authenticated and not already tracked
+    if (isAuthenticated && !watchSessionId) {
+      startWatching();
+    }
   };
 
+  // onPlay event: start session if applicable
+  const onPlay = () => {
+    setIsPlaying(true);
+    if (isAuthenticated && !watchSessionId) {
+      startWatching();
+    }
+  };
+
+  // onPause event: stop session but only if we were watching
+  const onPause = () => {
+    setIsPlaying(false);
+    if (isAuthenticated && watchSessionId) {
+      stopWatching();
+    }
+  };
+
+  // Manual buttons for play/pause
   const handlePlay = () => {
     if (player) player.playVideo();
     setIsPlaying(true);
+    if (isAuthenticated && !watchSessionId) {
+      startWatching();
+    }
   };
   const handlePause = () => {
     if (player) player.pauseVideo();
     setIsPlaying(false);
+    if (isAuthenticated && watchSessionId) {
+      stopWatching();
+    }
   };
   const handleVolume = (v) => {
     setVolume(v);
     if (player) player.setVolume(v);
   };
+
+  // Track logout (stop session on manual logout event)
+  useEffect(() => {
+    if (!isAuthenticated && watchSessionId) {
+      // If user logs out, stop their session
+      stopWatching();
+    }
+    // eslint-disable-next-line
+  }, [isAuthenticated]);
 
   // Responsive video sizing
   function getYouTubeOpts() {
@@ -168,11 +268,21 @@ function MainApp() {
               videoId={YOUTUBE_LIVE_VIDEO_ID}
               opts={getYouTubeOpts()}
               onReady={onPlayerReady}
+              onPlay={onPlay}
+              onPause={onPause}
               className="video-player"
               iframeClassName="yt-iframe"
             />
             <div className={`live-indicator ${liveStatus === "LIVE" ? "on" : "off"}`}>
               <span className="dot" /> {liveStatus}
+              {/* Show user's own watch state if authenticated */}
+              {isAuthenticated && (
+                <span style={{ marginLeft: 8, fontSize: ".98em", color: "#fff" }}>
+                  {watchSessionId
+                    ? "You are watching"
+                    : "Not watching"}
+                </span>
+              )}
             </div>
           </div>
           <div className="player-controls">
@@ -220,7 +330,15 @@ function MainApp() {
             </div>
             <div className="sidebar-content">
               {isAuthenticated ? (
-                "Coming soon!"
+                <>
+                  {watchSessionId
+                    ? <span style={{color:"var(--text-primary)"}}>Watching session #{watchSessionId}</span>
+                    : "Press ▶ to start watching and logging stats!"}
+                  <br />
+                  <span style={{fontSize:"0.98em", color:"var(--text-secondary)"}}>
+                    Your viewing events will appear in your stats history soon.
+                  </span>
+                </>
               ) : (
                 <>
                   <button
