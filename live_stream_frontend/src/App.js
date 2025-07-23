@@ -4,6 +4,7 @@ import "./App.css";
 import { AuthProvider, AuthContext } from "./AuthContext";
 import { LoginForm } from "./LoginForm";
 import { SignupForm } from "./SignupForm";
+import { StatsPanel } from "./StatsPanel";
 
 const BrandLogo = () => (
   <span
@@ -354,6 +355,8 @@ function MainApp() {
               )}
             </div>
           </div>
+          {/* --- Live Metrics Panel --- */}
+          <StatsPanel />
         </aside>
       </main>
       <footer className="live-footer">
