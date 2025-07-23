@@ -1,0 +1,38 @@
+# Dependency and build artifacts
+node_modules
+build
+dist
+
+# npm logs
+npm-debug.log
+yarn-error.log
+yarn-debug.log
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# Testing, configuration, and editor-related
+.eslint*
+*.lock
+*.pem
+
+# Env files
+.env
+.env.*
+
+
+# vscode/editor configs
+.vscode
+.idea
+
+# Miscellaneous
+coverage
+logs
+*.log
+*.swp
+*.zip
+*.tar.gz
+
+# Ignore local development files
+post_process_status.lock
